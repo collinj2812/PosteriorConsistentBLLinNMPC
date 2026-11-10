@@ -7,8 +7,9 @@ Every controller gets the same objective, constraints, horizon and tuning;
 the plant runs one episode from its x0.  One closed loop per (training-set
 size, training draw, tree kind); logs go to runs/<plant>/ and are reused
 unless ``--rerun``.  The aleatoric tightening applies to the
-output_space_epistemic and weight_space trees (``--tightening-mode``); the
-nominal controller and the lumped output_space interval take none.
+output_space_epistemic, weight_space and random trees (``--tightening-mode``);
+the nominal controller and the lumped output_space interval take none, and
+``nominal_tube`` is the nominal controller with the tube alone.
 """
 
 from __future__ import annotations
@@ -28,7 +29,7 @@ from pcbll.control import ClosedLoopLog, SurrogateMPC, TreeConfig, run_closed_lo
 from pcbll.control.surrogate_mpc import enable_hsl
 from pcbll.plant import get_plant
 
-TIGHTENED = ("output_space_epistemic", "weight_space")
+TIGHTENED = ("output_space_epistemic", "weight_space", "random", "nominal_tube")
 
 
 def main() -> None:
@@ -36,8 +37,8 @@ def main() -> None:
     ap.add_argument("--plant", required=True, help="plant name, e.g. cstr_econ_pn0.02 or synthetic_a1.4")
     ap.add_argument("--n-episodes", type=int, nargs="+", default=[5], help="training-set sizes of the cached surrogates")
     ap.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2], help="data seeds of the surrogates (training draws)")
-    ap.add_argument("--kinds", nargs="+", default=["nominal", "output_space", "output_space_epistemic", "weight_space"])
-    ap.add_argument("--k", type=int, default=4, help="directions of the weight-space tree; scenarios = 1 + 2k")
+    ap.add_argument("--kinds", nargs="+", default=["nominal", "nominal_tube", "output_space", "output_space_epistemic", "random", "weight_space"])
+    ap.add_argument("--k", type=int, default=4, help="directions of the weight-space and random trees; scenarios = 1 + 2k")
     ap.add_argument("--r", type=float, default=2.0)
     ap.add_argument("--tightening", type=float, default=2.0, help="aleatoric back-off in units of sigma_n")
     ap.add_argument("--tightening-mode", choices=["constant", "tube"], default="tube")
@@ -68,11 +69,12 @@ def main() -> None:
         for n in args.n_episodes:
             sur, _ = surrogate(plant, n, seed=seed, verbose=False)
             noise_std = np.sqrt(sur.posterior.sigma_e2) * sur.model.scaler_y.scale * args.measurement_noise
-            for kind in args.kinds:
-                mode = args.tightening_mode if kind in TIGHTENED else "constant"
+            for name in args.kinds:
+                kind = "nominal" if name == "nominal_tube" else name
+                mode = args.tightening_mode if name in TIGHTENED else "constant"
                 cfg = TreeConfig(kind=kind, horizon=args.horizon, r=args.r, n_directions=args.k, tightening=args.tightening, linearize=args.linearize,
                                  store_predictions=args.store_predictions, tightening_mode=mode,
-                                 input_move_weight=args.input_move_weight, linear_solver=solver)
+                                 input_move_weight=args.input_move_weight, linear_solver=solver, seed=args.noise_seed)
                 tube = "_tube" if cfg.uses_tube else ""
                 stem = f"cl_n{n}_draw{seed}_{kind}{tube}_k{args.k}_r{args.r:g}_c{args.tightening:g}_N{args.horizon}_T{n_steps}_mn{args.measurement_noise:g}{imw}_ns{args.noise_seed}"
                 path = run_dir / f"{stem}.npz"
@@ -85,11 +87,11 @@ def main() -> None:
                         plant.reseed(1000 + args.noise_seed)
                     log = run_closed_loop(plant, ctrl, spec.x0, n_steps, noise_std=noise_std, rng=np.random.default_rng(args.noise_seed))
                     log.save(path)
-                    print(f"n={n} draw={seed} {kind}: {n_steps} steps in {time.time() - t:.0f}s", flush=True)
+                    print(f"n={n} draw={seed} {name}: {n_steps} steps in {time.time() - t:.0f}s", flush=True)
                 v = violations(spec, log.x)
                 ts = log.solve_times()
                 rows.append({
-                    "n": n, "draw": seed, "kind": kind, "scenarios": cfg.n_scenarios, "tightening_mode": mode, "cost": float(plant.cost(log.x, log.u)),
+                    "n": n, "draw": seed, "kind": name, "scenarios": cfg.n_scenarios, "tightening_mode": mode, "cost": float(plant.cost(log.x, log.u)),
                     "viol_freq": {c: d["frequency"] for c, d in v.items()}, "viol_max": {c: d["max"] for c, d in v.items()},
                     "t_solve_mean": float(np.nanmean(ts)), "t_solve_max": float(np.nanmax(ts)),
                     "failures": int(sum(1 for d in log.info if not d.get("success", True))),

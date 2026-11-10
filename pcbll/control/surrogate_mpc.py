@@ -13,6 +13,9 @@ Tree kinds (``TreeConfig.kind``):
   sensitivity-weighted max-min rule on the constraint gradients of the
   linearised prediction; each branch carries its fixed weight matrix W over
   the whole horizon.
+* ``"random"``: 1 + 2k branches at ``mean +- r`` along k random whitened
+  directions drawn once (``TreeConfig.seed``) and held; the control baseline
+  for the selection.
 
 The uncertain parameter of the do-mpc model is ``vec(W)`` (or the sign s);
 do-mpc calls ``p_fun`` at every step, so the per-branch values are updated in
@@ -48,13 +51,14 @@ import do_mpc
 from pcbll.bll.casadi_export import feature_expr, predict_expr, variance_expr
 from pcbll.plant.base import PlantSpec
 from pcbll.surrogate import NarxSurrogate
-from pcbll.tree import captured_fraction, constraint_gradients, row_weights, scenario_weights, select_directions
+from pcbll.tree import captured_fraction, constraint_gradients, random_directions, row_weights, scenario_weights, select_directions
 
 __all__ = ["TreeConfig", "SurrogateMPC"]
 
-Kind = Literal["nominal", "output_space", "output_space_epistemic", "weight_space"]
+Kind = Literal["nominal", "output_space", "output_space_epistemic", "weight_space", "random"]
 
-_KINDS = ("nominal", "output_space", "output_space_epistemic", "weight_space")
+_KINDS = ("nominal", "output_space", "output_space_epistemic", "weight_space", "random")
+_DIRECTIONAL = ("weight_space", "random")
 _OUTPUT_SPACE = ("output_space", "output_space_epistemic")
 
 
@@ -91,8 +95,10 @@ class TreeConfig:
     kind: Kind = "weight_space"
     horizon: int = 20
     r: float = 2.0
-    #: number of selected directions k (weight_space); scenarios = 1 + 2k
+    #: number of directions k (weight_space, random); scenarios = 1 + 2k
     n_directions: int = 4
+    #: seed of the random directions (random)
+    seed: int = 0
     #: aleatoric back-off in units of sigma_n; ignored for 'nominal' (unless tube) and 'output_space'
     tightening: float = 2.0
     #: row weights of the max-min selection: 'sensitivity' = ||g_w|| (rows with a wide posterior
@@ -118,7 +124,7 @@ class TreeConfig:
     def __post_init__(self) -> None:
         if self.kind not in _KINDS:
             raise ValueError(f"unknown tree kind {self.kind!r}")
-        if self.n_directions < 1 and self.kind == "weight_space":
+        if self.n_directions < 1 and self.kind in _DIRECTIONAL:
             raise ValueError("n_directions must be >= 1")
 
     @property
@@ -282,6 +288,9 @@ class SurrogateMPC:
         elif kind in _OUTPUT_SPACE:
             for i, s in enumerate((0.0, 1.0, -1.0)):
                 self._p["_p", i, "s"] = s
+        elif kind == "random":
+            D = random_directions(self.post, self.config.n_directions, np.random.default_rng(self.config.seed))
+            self._set_weights(scenario_weights(self.post, D, self.config.r)[0])
         elif kind == "weight_space":  # replaced at every step by the selection
             self._set_weights(np.repeat(self.post.mean[None], self.config.n_scenarios, axis=0))
 

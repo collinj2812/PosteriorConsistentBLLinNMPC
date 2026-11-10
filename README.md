@@ -52,8 +52,11 @@ python scripts/closed_loop.py --plant synthetic_a1.4 --n-episodes 10 --seeds 0
 | `scripts/closed_loop.py` | Tables 2 and 3 (cost, violations, solve times per tree) |
 
 `scripts/closed_loop.py` reuses the logs under `runs/<plant>/` unless
-`--rerun` is given; `--kinds nominal output_space output_space_epistemic
-weight_space` selects the controllers.
+`--rerun` is given; `--kinds` selects the controllers of Table 3: `nominal`,
+`nominal_tube` (nominal with the aleatoric tube), `output_space` (total
+sigma), `output_space_epistemic` (epistemic sigma plus tube), `random`
+(random directions plus tube) and `weight_space` (Algorithm 1 plus tube).
+Table 2 is the same script with `--k 2`, `4`, `8`, `16`.
 
 ## Layout
 
